@@ -262,6 +262,7 @@ type
     function GetNodeType: TXmlNodeType; inline;
     function GetValue: XmlString;
     procedure SetValue(const AValue: XmlString);
+    function GetText: XmlString;
     function GetValueIndex: Integer; inline;
     procedure SetValueIndex(const AValue: Integer); inline;
     function GetParent: TXmlNode;
@@ -275,6 +276,7 @@ type
     procedure SetNextSibling(const AValue: TXmlNode);
     function GetPrevSibling: TXmlNode;
     procedure SetPrevSibling(const AValue: TXmlNode);
+    function GetPrevSiblingEx: TXmlNode;
     function GetDocument: TXmlDocument; inline;
   private
     procedure Free;
@@ -289,6 +291,9 @@ type
     class operator Equal(const ALeft, ARight: TXmlNode): Boolean; overload; inline; static;
     class operator NotEqual(const ALeft: TXmlNode; const ARight: Pointer): Boolean; overload; inline; static;
     class operator NotEqual(const ALeft, ARight: TXmlNode): Boolean; overload; inline; static;
+
+    { Returns a nil node }
+    class function Create: TXmlNode; inline; static;
 
     { Returns a node enumerator to enable for..in enumeration, as in:
         for var Child in Node do ... }
@@ -508,6 +513,21 @@ type
       * For CData nodes, this is the CData. }
     property Value: XmlString read GetValue write SetValue;
 
+    { The text of this node. This differs from the Value property in case this
+      is an Element:
+      * For Element nodes, this is the concatenation of all direct children of
+        this node that are of type Text or CData. A space will be added between
+        concatenated strings if needed.
+      * For Text nodes, this is the text.
+      * For Comment nodes, this is the comment.
+      * For CData nodes, this is the CData.
+
+      For example, given this XML code:
+        <node>foo<child/>bar</node>
+      The the Text property of <node> will return 'foo bar' (with a space
+      between them) }
+    property Text: XmlString read GetText;
+
     { This parent of this node, or nil if this is the root of the document
       (See IXmlDocument.Root) }
     property Parent: TXmlNode read GetParent;
@@ -554,6 +574,10 @@ type
         Child := Child.NextSibling;
       end; }
     property NextSibling: TXmlNode read GetNextSibling;
+
+    { The previous sibling of this node, or nil in case this is not an Element
+      node, or this node is nil, or this node doesn't have any siblings. }
+    property PrevSibling: TXmlNode read GetPrevSiblingEx;
   end;
 
   { A XML document. This is the entry point of this XML library.
@@ -1232,6 +1256,11 @@ begin
   end;
 end;
 
+class function TXmlNode.Create: TXmlNode;
+begin
+  Result.FNode := nil;
+end;
+
 function TXmlNode.ElementByAttribute(const AAttributeName,
   AAttributeValue: XmlString): TXmlNode;
 begin
@@ -1534,6 +1563,42 @@ begin
       Result.FNode := Pointer(Block + (Bits shl 3));
     end;
   end;
+end;
+
+function TXmlNode.GetPrevSiblingEx: TXmlNode;
+{ As PrevSibling, but returns nil in case there is no "real" previous sibling
+  (instead of the last child because PrevSibling is circular) }
+begin
+  Result := GetPrevSibling;
+  if (Result.GetNextSibling = nil) then
+    Result.FNode := nil;
+end;
+
+function TXmlNode.GetText: XmlString;
+begin
+  if (FNode = nil) then
+    Result := ''
+  else if (GetNodeType = TXmlNodeType.Element) then
+  begin
+    Result := '';
+    var Child := GetFirstChild;
+    while (Child <> nil) do
+    begin
+      if (Child.NodeType in [TXmlNodeType.Text, TXmlNodeType.CData]) then
+      begin
+        var ChildText := Child.Value;
+        if (ChildText <> '') then
+        begin
+          if (Result <> '') and (not Result.EndsWith(' ')) and (not ChildText.StartsWith(' ')) then
+            Result := Result + ' ';
+          Result := Result + ChildText;
+        end;
+      end;
+      Child := Child.GetNextSibling;
+    end;
+  end
+  else
+    Result := GetValue;
 end;
 
 function TXmlNode.GetValue: XmlString;
@@ -2191,6 +2256,8 @@ begin
     begin
       if (Result.NodeType = TXmlNodeType.Element) then
         Exit;
+
+      Result := Result.NextSibling;
     end;
   end;
   Result.FNode := nil;
@@ -2380,7 +2447,7 @@ begin
   if (Bytes = nil) then
     Exit;
 
-  var Stream := TFileStream.Create(AFilename, fmCreate);
+  var Stream := TFileStream.Create(AFilename, fmCreate or fmShareDenyWrite);
   try
     Stream.WriteBuffer(Bytes, Length(Bytes));
   finally
